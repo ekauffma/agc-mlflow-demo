@@ -107,7 +107,7 @@ USE_MLFLOW = True
 N_FOLD = 5
 
 # number of trials (per model) for hyperparameter optimization. Total number of trials will be 2*N_TRIALS
-N_TRIALS = 10
+N_TRIALS = 5
 
 # number of events to use for training (choose smaller number, i.e. 10000, for quick demo)
 N_TRAIN = 10000
@@ -446,8 +446,8 @@ def initialize_mlflow():
 
     os.environ['MLFLOW_TRACKING_URI'] = "https://mlflow.software-dev.ncsa.cloud"
     os.environ['MLFLOW_S3_ENDPOINT_URL'] = "https://mlflow-minio-api.software-dev.ncsa.cloud"
-    os.environ['AWS_ACCESS_KEY_ID'] = "bengal1"
-    os.environ['AWS_SECRET_ACCESS_KEY'] = "leftfoot1"
+    os.environ['AWS_ACCESS_KEY_ID'] = ""
+    os.environ['AWS_SECRET_ACCESS_KEY'] = ""
     
     mlflow.set_tracking_uri('https://mlflow.software-dev.ncsa.cloud') 
     mlflow.set_experiment("agc-demo")
@@ -457,8 +457,8 @@ def initialize_mlflow():
 # define environment variables locally
 # %env MLFLOW_TRACKING_URI=https://mlflow.software-dev.ncsa.cloud
 # %env MLFLOW_S3_ENDPOINT_URL=https://mlflow-minio-api.software-dev.ncsa.cloud
-# %env AWS_ACCESS_KEY_ID=bengal1
-# %env AWS_SECRET_ACCESS_KEY=leftfoot1
+# %env AWS_ACCESS_KEY_ID=
+# %env AWS_SECRET_ACCESS_KEY=
 
 # %% tags=[]
 # set up trials
@@ -674,12 +674,8 @@ if not WRITE_OVER:
     os.mkdir(f"/mnt/{MODEL_NAME}/{model_version}")
     
     
-print(f"Saving Model to /mnt/{MODEL_NAME}/{model_version}/xgboost.json")
-loaded_model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.json")
-
-model = xgboost.XGBClassifier()
-model.load_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.json")
-model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.json")
+print(f"Saving Model to /mnt/{MODEL_NAME}/{model_version}/xgboost.model")
+loaded_model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.model")
 
 # %% tags=[]
 ## MODEL 2 OPTIMIZATION
@@ -751,12 +747,8 @@ if WRITE_OVER:
 if not WRITE_OVER:
     os.mkdir(f"/mnt/{MODEL_NAME}/{model_version}")
     
-print(f"Saving Model to /mnt/{MODEL_NAME}/{model_version}/xgboost.json")
-loaded_model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.json")
-
-model = xgboost.XGBClassifier()
-model.load_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.json")
-model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.json")
+print(f"Saving Model to /mnt/{MODEL_NAME}/{model_version}/xgboost.model")
+loaded_model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.model")
 
 # %% [markdown]
 # After running hyperparameter optimization for both models, we can view the results of the trials at [this link](https://mlflow.software-dev.ncsa.cloud/#/experiments/10/s?searchInput=&orderByKey=metrics.%60avg_test_roc_auc%60&orderByAsc=false&startTime=ALL&lifecycleFilter=Active&modelVersionFilter=All%20Runs&showMultiColumns=true&categorizedUncheckedKeys%5Battributes%5D%5B0%5D=&categorizedUncheckedKeys%5Bparams%5D%5B0%5D=&categorizedUncheckedKeys%5Bmetrics%5D%5B0%5D=&categorizedUncheckedKeys%5Btags%5D%5B0%5D=&diffSwitchSelected=false&preSwitchCategorizedUncheckedKeys%5Battributes%5D%5B0%5D=&preSwitchCategorizedUncheckedKeys%5Bparams%5D%5B0%5D=&preSwitchCategorizedUncheckedKeys%5Bmetrics%5D%5B0%5D=&preSwitchCategorizedUncheckedKeys%5Btags%5D%5B0%5D=&postSwitchCategorizedUncheckedKeys%5Battributes%5D%5B0%5D=&postSwitchCategorizedUncheckedKeys%5Bparams%5D%5B0%5D=&postSwitchCategorizedUncheckedKeys%5Bmetrics%5D%5B0%5D=&postSwitchCategorizedUncheckedKeys%5Btags%5D%5B0%5D=). The best models can be seen at the top of the list with links to their associated registered models.
@@ -777,8 +769,5 @@ with open(f'/mnt/{MODEL_NAME}/config.pbtxt', 'w') as the_file:
 # %%
 # print contents of triton server model directory
 print(os.listdir(f"/mnt/{MODEL_NAME}"))
-
-# %%
-# !curl -v agc-triton-inference-server:8000/v2/models/sigbkg_bdt/config
 
 # %%

@@ -84,7 +84,7 @@ def construct_fileset(n_files_max_per_sample, use_xcache=False, af_name="", ntup
 # modified from generate_config in https://github.com/triton-inference-server/fil_backend/blob/main/qa/L0_e2e/generate_example_model.py
 def generate_triton_config(model_name, 
                            num_features, 
-                           model_format='xgboost_json',
+                           model_format='xgboost',
                            num_classes=2, 
                            instance_kind='gpu', 
                            predict_proba=False,
