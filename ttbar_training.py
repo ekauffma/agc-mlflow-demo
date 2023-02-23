@@ -103,11 +103,14 @@ USE_DASK_ML = True
 # enable MLFlow logging (to store metrics and models of hyperparameter optimization trials)
 USE_MLFLOW = True
 
+# enable MLFlow model logging/registering
+MODEL_LOGGING = False
+
 # number of folds for cross-validation
 N_FOLD = 5
 
 # number of trials (per model) for hyperparameter optimization. Total number of trials will be 2*N_TRIALS
-N_TRIALS = 5
+N_TRIALS = 20
 
 # number of events to use for training (choose smaller number, i.e. 10000, for quick demo)
 N_TRAIN = 10000
@@ -277,28 +280,18 @@ features_background = features[labels==0]
 even_signal = even[labels==1]
 even_background = even[labels==0]
 
-# calculate initial signal to background ratio
 sb_ratio = len(features_signal)/len(features_background)
 print("Initial Sig/Bkg Ratio = ", sb_ratio)
 
-# if there is significantly more background than signal
-num_to_remove = int(0.001*len(features_background))
-if sb_ratio<0.98:
-    while sb_ratio<0.98:
-        # remove 0.1% of events from background
-        features_background = features_background[:-num_to_remove,:]
-        even_background = even_background[:-num_to_remove]
-        sb_ratio = len(features_signal)/len(features_background) # recalculate ratio
-        
-# if there is significantly more signal than signal
-num_to_remove = int(0.001*len(features_signal))
-if sb_ratio>1.02:
-    while sb_ratio>1.02:
-        # remove 0.1% of events from signal
-        features_signal = features_signal[:-num_to_remove,:]
-        even_signal = even_signal[:-num_to_remove]
-        sb_ratio = len(features_signal)/len(features_background) # recalculate ratio
+if len(features_signal)>len(features_background):
+    features_signal = features_signal[:len(features_background)]
+    even_signal = even_signal[:len(features_background)]
+    
+if len(features_background)>len(features_signal):
+    features_background = features_background[:len(features_signal)]
+    even_background = even_background[:len(features_signal)]
 
+sb_ratio = len(features_signal)/len(features_background)
 print("Final Sig/Bkg Ratio = ", sb_ratio)
 
 # %% tags=[]
@@ -523,11 +516,11 @@ for i in range(N_TRIALS):
         samples_odd[i]['run_id'] = run_id_list[i+N_TRIALS]
     
 print("Example of Trial Parameters: ")
-samples_even[3]
+samples_even[0]
 
 
 # %% tags=[]
-def fit_model(params, features, labels, cv, use_mlflow=True): 
+def fit_model(params, features, labels, cv, use_mlflow=True, model_logging=True): 
     
     trial_num = params["trial_num"]
     parity = params["parity"]
@@ -585,12 +578,17 @@ def fit_model(params, features, labels, cv, use_mlflow=True):
         model.fit(features,labels)
 
         # log model in mlflow
-        # this (may) cause conflicts if it runs at the same time on multiple workers... need to investigate
-        signature = infer_signature(features, model.predict(features))
-        with mlflow.start_run(run_id=run_id, nested=True) as run:
-            mlflow.xgboost.log_model(model, "model", signature=signature)
+        if model_logging:
+            signature = infer_signature(features, model.predict(features))
+            with mlflow.start_run(run_id=run_id, nested=True) as run:
+                mlflow.xgboost.log_model(model, "model", signature=signature)
     
-    return result['test_roc_auc'].mean()
+    if model_logging:
+        return {'score': result['test_roc_auc'].mean()}
+    
+    else: # return models as well if we do not log in mlflow
+        return {'score': result['test_roc_auc'].mean(),
+                'model': model}
 
 
 # %% tags=[]
@@ -615,7 +613,9 @@ if USE_DASK_ML:
                          features=features_even[:N_TRAIN,:], 
                          labels=labels_even[:N_TRAIN],
                          cv=folds,
-                         use_mlflow=USE_MLFLOW) 
+                         use_mlflow=USE_MLFLOW,
+                         model_logging=MODEL_LOGGING) 
+    
     res = client.gather(futures) 
     time_elapsed = time.time() - start_time
         
@@ -627,25 +627,31 @@ else:
                            features=features_even[:N_TRAIN,:],
                            labels=labels_even[:N_TRAIN], 
                            cv=folds,
-                           use_mlflow=USE_MLFLOW)
+                           use_mlflow=USE_MLFLOW,
+                           model_logging=MODEL_LOGGING)
+        
     time_elapsed = time.time() - start_time
     
 print("Hyperparameter optimization took time = ", time_elapsed)
-        
-print("Highest AUC = ", max(res))
+
+scores = [res[i]['score'] for i in range(N_TRIALS)]
+print("Highest AUC = ", max(scores))
 print("Parameters for Model with Highest AUC = ")
-samples_even[np.argmax(res)]
+samples_even[np.argmax(scores)]
 
 # %% tags=[]
 # load best model
-# best_run_id = samples_even[np.argmax(res)]['run_id']
-best_run_id = samples_even[2]['run_id']
-best_model_path = f'runs:/{best_run_id}/model'
-loaded_model = mlflow.xgboost.load_model(best_model_path)
+if MODEL_LOGGING:
+    best_run_id = samples_even[np.argmax(scores)]['run_id']
+    best_model_path = f'runs:/{best_run_id}/model'
+    best_model = mlflow.xgboost.load_model(best_model_path)
+else:
+    best_run_id = samples_even[np.argmax(scores)]['run_id']
+    best_model = res[np.argmax(scores)]['model']
 
 # %% tags=[]
-predictions_train = loaded_model.predict(features_even)
-predictions_test = loaded_model.predict(features_odd)
+predictions_train = best_model.predict(features_even)
+predictions_test = best_model.predict(features_odd)
 
 print("Train Accuracy = ", accuracy_score(predictions_train[:N_TRAIN], labels_even[:N_TRAIN]))
 print("Train Precision = ", precision_score(predictions_train[:N_TRAIN], labels_even[:N_TRAIN]))
@@ -661,7 +667,8 @@ print("Test ROC_AUC = ", roc_auc_score(predictions_test, labels_odd))
 
 # %% tags=[]
 # load best model into model registry
-result = mlflow.register_model(best_model_path, "sig-bkg-bdt")
+if MODEL_LOGGING:
+    result = mlflow.register_model(best_model_path, "sig-bkg-bdt")
 
 # %%
 # save registered model to triton directory
@@ -675,7 +682,7 @@ if not WRITE_OVER:
     
     
 print(f"Saving Model to /mnt/{MODEL_NAME}/{model_version}/xgboost.model")
-loaded_model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.model")
+best_model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.model")
 
 # %% tags=[]
 ## MODEL 2 OPTIMIZATION
@@ -686,8 +693,10 @@ if USE_DASK_ML:
                          samples_odd, 
                          features=features_odd[:N_TRAIN,:], 
                          labels=labels_odd[:N_TRAIN],
-                         cv=folds, 
-                         use_mlflow=USE_MLFLOW) 
+                         cv=folds,
+                         use_mlflow=USE_MLFLOW,
+                         model_logging=MODEL_LOGGING) 
+    
     res = client.gather(futures) 
     time_elapsed = time.time() - start_time
         
@@ -696,28 +705,34 @@ else:
     res = np.zeros(len(samples_odd))
     for i in range(len(samples_odd)):
         res[i] = fit_model(samples_odd[i], 
-                           features=features_odd[:N_TRAIN,:], 
+                           features=features_odd[:N_TRAIN,:],
                            labels=labels_odd[:N_TRAIN], 
-                           cv=folds, 
-                           use_mlflow=USE_MLFLOW) 
+                           cv=folds,
+                           use_mlflow=USE_MLFLOW,
+                           model_logging=MODEL_LOGGING)
+        
     time_elapsed = time.time() - start_time
     
 print("Hyperparameter optimization took time = ", time_elapsed)
-        
-print("Highest AUC = ", max(res))
+
+scores = [res[i]['score'] for i in range(N_TRIALS)]
+print("Highest AUC = ", max(scores))
 print("Parameters for Model with Highest AUC = ")
-samples_odd[np.argmax(res)]
+samples_odd[np.argmax(scores)]
 
 # %% tags=[]
 # load best model
-# best_run_id = samples_odd[np.argmax(res)]['run_id']
-best_run_id = samples_odd[2]['run_id']
-best_model_path = f'runs:/{best_run_id}/model'
-loaded_model = mlflow.xgboost.load_model(best_model_path)
+if MODEL_LOGGING:
+    best_run_id = samples_odd[np.argmax(scores)]['run_id']
+    best_model_path = f'runs:/{best_run_id}/model'
+    best_model = mlflow.xgboost.load_model(best_model_path)
+else:
+    best_run_id = samples_odd[np.argmax(scores)]['run_id']
+    best_model = res[np.argmax(scores)]['model']
 
 # %% tags=[]
-predictions_train = loaded_model.predict(features_odd)
-predictions_test = loaded_model.predict(features_even)
+predictions_train = best_model.predict(features_odd)
+predictions_test = best_model.predict(features_even)
 
 print("Train Accuracy = ", accuracy_score(predictions_train[:N_TRAIN], labels_odd[:N_TRAIN]))
 print("Train Precision = ", precision_score(predictions_train[:N_TRAIN], labels_odd[:N_TRAIN]))
@@ -733,7 +748,8 @@ print("Test ROC_AUC = ", roc_auc_score(predictions_test, labels_even))
 
 # %% tags=[]
 # load best model into model registry
-result = mlflow.register_model(best_model_path, "sig-bkg-bdt")
+if MODEL_LOGGING:
+    result = mlflow.register_model(best_model_path, "sig-bkg-bdt")
 
 # %%
 # save registered model to triton directory
@@ -742,13 +758,15 @@ if len(os.listdir(f"/mnt/{MODEL_NAME}"))==0:
 else:
     model_version=int(max(next(os.walk(f"/mnt/{MODEL_NAME}"))[1]))+1
 if WRITE_OVER:
+    if not os.path.isdir(f"/mnt/{MODEL_NAME}/{model_version}"):
+        os.mkdir(f"/mnt/{MODEL_NAME}/{model_version}")
     model_version=2
     
 if not WRITE_OVER:
     os.mkdir(f"/mnt/{MODEL_NAME}/{model_version}")
     
 print(f"Saving Model to /mnt/{MODEL_NAME}/{model_version}/xgboost.model")
-loaded_model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.model")
+best_model.save_model(f"/mnt/{MODEL_NAME}/{model_version}/xgboost.model")
 
 # %% [markdown]
 # After running hyperparameter optimization for both models, we can view the results of the trials at [this link](https://mlflow.software-dev.ncsa.cloud/#/experiments/10/s?searchInput=&orderByKey=metrics.%60avg_test_roc_auc%60&orderByAsc=false&startTime=ALL&lifecycleFilter=Active&modelVersionFilter=All%20Runs&showMultiColumns=true&categorizedUncheckedKeys%5Battributes%5D%5B0%5D=&categorizedUncheckedKeys%5Bparams%5D%5B0%5D=&categorizedUncheckedKeys%5Bmetrics%5D%5B0%5D=&categorizedUncheckedKeys%5Btags%5D%5B0%5D=&diffSwitchSelected=false&preSwitchCategorizedUncheckedKeys%5Battributes%5D%5B0%5D=&preSwitchCategorizedUncheckedKeys%5Bparams%5D%5B0%5D=&preSwitchCategorizedUncheckedKeys%5Bmetrics%5D%5B0%5D=&preSwitchCategorizedUncheckedKeys%5Btags%5D%5B0%5D=&postSwitchCategorizedUncheckedKeys%5Battributes%5D%5B0%5D=&postSwitchCategorizedUncheckedKeys%5Bparams%5D%5B0%5D=&postSwitchCategorizedUncheckedKeys%5Bmetrics%5D%5B0%5D=&postSwitchCategorizedUncheckedKeys%5Btags%5D%5B0%5D=). The best models can be seen at the top of the list with links to their associated registered models.
@@ -769,5 +787,8 @@ with open(f'/mnt/{MODEL_NAME}/config.pbtxt', 'w') as the_file:
 # %%
 # print contents of triton server model directory
 print(os.listdir(f"/mnt/{MODEL_NAME}"))
+
+# %%
+# !curl -v agc-triton-inference-server:8000/v2/models/sigbkg_bdt/config
 
 # %%
