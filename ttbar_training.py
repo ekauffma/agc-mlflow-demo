@@ -62,9 +62,6 @@ from mlflow.models.signature import infer_signature
 from mlflow.tracking import MlflowClient
 from xgboost import XGBClassifier
 
-import xgboost
-print("xgboost version = ", xgboost.__version__) # want this to be <1.7.0 for json
-
 import utils  # contains code for bookkeeping and cosmetics, as well as some boilerplate
 
 # %% [markdown]
@@ -416,8 +413,8 @@ np.random.shuffle(shuffle_ind_odd)
 features_odd = features_odd[shuffle_ind_odd]
 labels_odd = labels_odd[shuffle_ind_odd]
 
-print("Signal to Background Ratio for Even-Numbered Events = ", np.average(labels_even))
-print("Signal to Background Ratio for Odd-Numbered Events = ", np.average(labels_odd))
+print("% Signal for Even-Numbered Events = ", 100*np.average(labels_even))
+print("% Signal for Odd-Numbered Events = ", 100*np.average(labels_odd))
 
 # %% tags=[]
 # preprocess features so that they are more Gaussian-like
@@ -439,29 +436,29 @@ def initialize_mlflow():
 
     os.environ['MLFLOW_TRACKING_URI'] = "https://mlflow.software-dev.ncsa.cloud"
     os.environ['MLFLOW_S3_ENDPOINT_URL'] = "https://mlflow-minio-api.software-dev.ncsa.cloud"
-    os.environ['AWS_ACCESS_KEY_ID'] = ""
-    os.environ['AWS_SECRET_ACCESS_KEY'] = ""
+    os.environ['AWS_ACCESS_KEY_ID'] = "bengal1"
+    os.environ['AWS_SECRET_ACCESS_KEY'] = "leftfoot1"
     
     mlflow.set_tracking_uri('https://mlflow.software-dev.ncsa.cloud') 
-    mlflow.set_experiment("agc-demo")
+    mlflow.set_experiment("agc-training-demo")
 
 
 # %% tags=[]
 # define environment variables locally
 # %env MLFLOW_TRACKING_URI=https://mlflow.software-dev.ncsa.cloud
 # %env MLFLOW_S3_ENDPOINT_URL=https://mlflow-minio-api.software-dev.ncsa.cloud
-# %env AWS_ACCESS_KEY_ID=
-# %env AWS_SECRET_ACCESS_KEY=
+# %env AWS_ACCESS_KEY_ID=bengal1
+# %env AWS_SECRET_ACCESS_KEY=leftfoot1
 
 # %% tags=[]
 # set up trials
 
 if USE_MLFLOW:
     mlflow.set_tracking_uri('https://mlflow.software-dev.ncsa.cloud') 
-    mlflow.set_experiment("agc-demo") # this will create the experiment if it does not yet exist
+    mlflow.set_experiment("agc-training-demo") # this will create the experiment if it does not yet exist
 
     # grab experiment
-    current_experiment=dict(mlflow.get_experiment_by_name("agc-demo"))
+    current_experiment=dict(mlflow.get_experiment_by_name("agc-training-demo"))
     experiment_id=current_experiment['experiment_id']
     print("experiment_id = ", experiment_id)
 
@@ -497,7 +494,7 @@ sampler = ParameterSampler(
         'booster': ['gbtree'], # which booster to use
     },
     n_iter = N_TRIALS, # number of trials to perform
-    random_state=23,
+    random_state=1,
 ) 
 
 samples_even = list(sampler)
@@ -520,18 +517,14 @@ samples_even[0]
 
 
 # %% tags=[]
-def fit_model(params, features, labels, cv, use_mlflow=True, model_logging=True): 
+def fit_model(params, features, labels, cv, mlflowclient=None, use_mlflow=True, model_logging=True): 
     
     trial_num = params["trial_num"]
     parity = params["parity"]
     
     if use_mlflow:
         run_id = params["run_id"]
-    
-        # create mlflow client
-        mlflowclient = MlflowClient()
-
-        # log parameters
+            
         for param, value in params.items(): 
             mlflowclient.log_param(run_id, param, value) 
             
@@ -552,56 +545,60 @@ def fit_model(params, features, labels, cv, use_mlflow=True, model_logging=True)
                             cv=cv, n_jobs=-1, 
                             return_train_score=True, return_estimator=True)
     
+    trial_metrics = {
+        "avg_train_roc_auc": result['train_roc_auc'].mean(), 
+        "avg_train_accuracy": result['train_accuracy'].mean(), 
+        "avg_train_precision": result['train_precision'].mean(), 
+        "avg_train_f1": result['train_f1'].mean(), 
+        "avg_train_recall": result['train_recall'].mean(), 
+        "avg_test_roc_auc": result['test_roc_auc'].mean(), 
+        "avg_test_accuracy": result['test_accuracy'].mean(), 
+        "avg_test_precision": result['test_precision'].mean(), 
+        "avg_test_f1": result['test_f1'].mean(), 
+        "avg_test_recall": result['test_recall'].mean(), 
+        "avg_fit_time": result['fit_time'].mean(),
+        "avg_score_time": result['score_time'].mean(),
+    }
+    
     if use_mlflow:
-        # log train metrics
-        mlflowclient.log_metric(run_id, 'avg_train_roc_auc', result['train_roc_auc'].mean())
-        mlflowclient.log_metric(run_id, 'avg_train_accuracy', result['train_accuracy'].mean())
-        mlflowclient.log_metric(run_id, 'avg_train_precision', result['train_precision'].mean())
-        mlflowclient.log_metric(run_id, 'avg_train_f1', result['train_f1'].mean())
-        mlflowclient.log_metric(run_id, 'avg_train_recall', result['train_recall'].mean())
-
-        # log test metrics
-        mlflowclient.log_metric(run_id, 'avg_test_roc_auc', result['test_roc_auc'].mean())
-        mlflowclient.log_metric(run_id, 'avg_test_accuracy', result['test_accuracy'].mean())
-        mlflowclient.log_metric(run_id, 'avg_test_precision', result['test_precision'].mean())
-        mlflowclient.log_metric(run_id, 'avg_test_f1', result['test_f1'].mean())
-        mlflowclient.log_metric(run_id, 'avg_test_recall', result['test_recall'].mean())
-
-        # log timing metrics
-        mlflowclient.log_metric(run_id, 'avg_fit_time', result['fit_time'].mean())
-        mlflowclient.log_metric(run_id, 'avg_score_time', result['score_time'].mean())
+        
+        for metric, value in trial_metrics.items():
+            # log timing metrics
+            mlflowclient.log_metric(run_id, metric, value)
 
         # manually end run
         mlflowclient.set_terminated(run_id)
+            
+    # fit model with all events
+    model.fit(features,labels)
 
-        # fit model with all events
-        model.fit(features,labels)
-
-        # log model in mlflow
-        if model_logging:
-            signature = infer_signature(features, model.predict(features))
-            with mlflow.start_run(run_id=run_id, nested=True) as run:
-                mlflow.xgboost.log_model(model, "model", signature=signature)
+    # log model in mlflow
+    if model_logging and use_mlflow:
+        signature = infer_signature(features, model.predict(features))
+        with mlflow.start_run(run_id=run_id, nested=True) as run:
+            mlflow.xgboost.log_model(model, "model", signature=signature)
     
     if model_logging:
         return {'score': result['test_roc_auc'].mean()}
     
     else: # return models as well if we do not log in mlflow
         return {'score': result['test_roc_auc'].mean(),
-                'model': model}
+                'model': model,
+                'all_metrics': trial_metrics}
 
 
 # %% tags=[]
 # folds to use for cross-validation
 folds = KFold(N_FOLD, random_state=5, shuffle=True)
 
+# set mlflowclient
+mlflowclient = MlflowClient()
+
 # %% tags=[]
 # set up dask client
 if USE_DASK_ML:
-    # client = Client("tcp://127.0.0.1:36355") # for local cluster
-    client = Client("tls://localhost:8786")
+    client = utils.get_client()
     client.run(initialize_mlflow)
-    print(client)
 
 # %% tags=[]
 ## MODEL 1 OPTIMIZATION
@@ -613,6 +610,7 @@ if USE_DASK_ML:
                          features=features_even[:N_TRAIN,:], 
                          labels=labels_even[:N_TRAIN],
                          cv=folds,
+                         mlflowclient=mlflowclient,
                          use_mlflow=USE_MLFLOW,
                          model_logging=MODEL_LOGGING) 
     
@@ -627,6 +625,7 @@ else:
                            features=features_even[:N_TRAIN,:],
                            labels=labels_even[:N_TRAIN], 
                            cv=folds,
+                           mlflowclient=mlflowclient,
                            use_mlflow=USE_MLFLOW,
                            model_logging=MODEL_LOGGING)
         
@@ -694,6 +693,7 @@ if USE_DASK_ML:
                          features=features_odd[:N_TRAIN,:], 
                          labels=labels_odd[:N_TRAIN],
                          cv=folds,
+                         mlflowclient=mlflowclient,
                          use_mlflow=USE_MLFLOW,
                          model_logging=MODEL_LOGGING) 
     
@@ -708,6 +708,7 @@ else:
                            features=features_odd[:N_TRAIN,:],
                            labels=labels_odd[:N_TRAIN], 
                            cv=folds,
+                           mlflowclient=mlflowclient,
                            use_mlflow=USE_MLFLOW,
                            model_logging=MODEL_LOGGING)
         
@@ -789,6 +790,4 @@ with open(f'/mnt/{MODEL_NAME}/config.pbtxt', 'w') as the_file:
 print(os.listdir(f"/mnt/{MODEL_NAME}"))
 
 # %%
-# !curl -v agc-triton-inference-server:8000/v2/models/sigbkg_bdt/config
-
-# %%
+# # !curl -v agc-triton-inference-server:8000/v2/models/sigbkg_bdt/config
