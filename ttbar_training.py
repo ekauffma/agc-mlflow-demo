@@ -444,13 +444,6 @@ def initialize_mlflow():
 
 
 # %% tags=[]
-# define environment variables locally
-# %env MLFLOW_TRACKING_URI=https://mlflow.software-dev.ncsa.cloud
-# %env MLFLOW_S3_ENDPOINT_URL=https://mlflow-minio-api.software-dev.ncsa.cloud
-# %env AWS_ACCESS_KEY_ID=bengal1
-# %env AWS_SECRET_ACCESS_KEY=leftfoot1
-
-# %% tags=[]
 # set up trials
 
 if USE_MLFLOW:
@@ -788,6 +781,3 @@ with open(f'/mnt/{MODEL_NAME}/config.pbtxt', 'w') as the_file:
 # %%
 # print contents of triton server model directory
 print(os.listdir(f"/mnt/{MODEL_NAME}"))
-
-# %%
-# # !curl -v agc-triton-inference-server:8000/v2/models/sigbkg_bdt/config
